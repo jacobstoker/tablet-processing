@@ -4,7 +4,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from config import RADIUS_SQUARED, RADIUS_SQUARED_CM, TOOL_HEIGHT
+from config import RADIUS_SQUARED, RADIUS_SQUARED_CM, TOOL_HEIGHT, graph_to_stage
+import plotly.express as px
 
 logging.basicConfig(level=logging.INFO)
 
@@ -86,7 +87,36 @@ def get_all_experiment_dataframes(experiment_stage: str, force_redo: bool) -> di
     return experiment_dataframes
 
 
+def get_experiment_dataframes(
+    experiment_stage: str, force_redo: bool, selected_experiments: list
+):
+    """Return a dictionary of all experiment names, and their corresponding DataFrame"""
+    path_to_data = Path("data")
+    experiments = get_list_of_subdirectories(path_to_data)
+    if selected_experiments:
+        experiments = [
+            experiment
+            for experiment in experiments
+            if any(
+                selected_experiment in str(experiment)
+                for selected_experiment in selected_experiments
+            )
+        ]
+
+    experiment_dataframes = {}
+    for experiment in experiments:
+        experiment_data_df = get_experiment_dataframe(
+            experiment_path=experiment,
+            experiment_stage=experiment_stage,
+            force_redo=force_redo,
+        )
+        experiment_dataframes[experiment.name] = experiment_data_df
+
+    return experiment_dataframes
+
+
 def setup_graph(x_label: str, y_label: str, title: str):
+    """Apply labels, titles etc to the matplotlib graph"""
     sns.set(style="darkgrid")
     plt.xlabel(x_label)
     plt.ylabel(y_label)
@@ -95,7 +125,7 @@ def setup_graph(x_label: str, y_label: str, title: str):
 
 
 def plot_experiments(experiment_dataframes: dict, x_column: str, y_column: str):
-    """Plot a scatter graph for a dictionary of dataframes"""
+    """Plot a matplotlib scatter graph for a given dictionary of dataframes and the specified columns within them"""
     for experiment, experiment_df in experiment_dataframes.items():
         missing_columns = [
             column
@@ -103,12 +133,32 @@ def plot_experiments(experiment_dataframes: dict, x_column: str, y_column: str):
             if column not in experiment_df.columns
         ]
         if missing_columns:
-            print(f"ERROR: {missing_columns} are not in the dataframe for {experiment}")
+            logging.error(
+                f"ERROR: {missing_columns} are not in the dataframe for {experiment}"
+            )
 
         plt.scatter(experiment_df[x_column], experiment_df[y_column], label=experiment)
     plt.legend()
     plt.show()
     return
+
+
+def plot_experiments_plotly(experiment_dataframes: dict, x_column: str, y_column: str):
+    """Plot a matplotlib scatter graph for a given dictionary of dataframes and the specified columns within them"""
+    fig = px.scatter()
+    for experiment, experiment_df in experiment_dataframes.items():
+        missing_columns = [
+            column
+            for column in [x_column, y_column]
+            if column not in experiment_df.columns
+        ]
+        if missing_columns:
+            logging.error(
+                f"ERROR: {missing_columns} are not in the dataframe for {experiment}"
+            )
+        fig.add_trace(px.scatter(experiment_df, x=x_column, y=y_column).data[0])
+
+    return fig
 
 
 def setup_and_plot_graph(graph_type: str, experiment_dataframes: dict):
@@ -138,6 +188,9 @@ def setup_and_plot_graph(graph_type: str, experiment_dataframes: dict):
         )
         add_common_making_columns(experiment_dataframes)
         add_compressibility_columns(experiment_dataframes)
+        # for experiment, df in experiment_dataframes.items():
+        #     print(f"\n\n{experiment}")
+        #     print(df)
         plot_experiments(
             experiment_dataframes=experiment_dataframes,
             x_column="pressure",
@@ -173,7 +226,41 @@ def setup_and_plot_graph(graph_type: str, experiment_dataframes: dict):
         )
 
 
+def setup_graph_columns(graph_type: str, experiment_dataframes: dict):
+    """
+    Given a dictionary of experiment dataframes and a graph type, calculate values for any missing columns
+    and plot the appropriate graph
+    """
+    add_common_columns(experiment_dataframes)
+    if graph_type == "Heckel":
+        add_common_making_columns(experiment_dataframes)
+        add_heckel_columns(experiment_dataframes)
+        return ("pressure", "ln(1/1-D)", experiment_dataframes)
+    elif graph_type == "Compressibility":
+        add_common_making_columns(experiment_dataframes)
+        add_compressibility_columns(experiment_dataframes)
+        return ("pressure", "porosity", experiment_dataframes)
+    elif graph_type == "Compactability":
+        add_common_breaking_columns(experiment_dataframes)
+        add_compactability_columns(experiment_dataframes)
+        compactability_dataframes = calculate_compactability(experiment_dataframes)
+        return ("porosity", "tensile_strength", compactability_dataframes)
+    elif graph_type == "Tabletability":
+        add_common_breaking_columns(experiment_dataframes)
+        add_tabletability_columns(experiment_dataframes)
+        tabletability_dataframes = calculate_tabletability(experiment_dataframes)
+        return (
+            "volume_occupancy",
+            "average_tensile_strength",
+            tabletability_dataframes,
+        )
+    else:
+        logging.error(f"ERROR: graph type {graph_type} is unsupported")
+        exit()
+
+
 def add_common_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for all graphs"""
     for experiment, experiment_df in experiment_dataframes.items():
         if "true_density_binary_mixture" not in experiment_df.columns:
             experiment_df["true_density_binary_mixture"] = 1 / (
@@ -187,6 +274,7 @@ def add_common_columns(experiment_dataframes: dict):
 
 
 def add_common_making_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for Making graphs"""
     for experiment, experiment_df in experiment_dataframes.items():
         if "height_of_powder" not in experiment_df.columns:
             experiment_df["height_of_powder"] = (
@@ -194,7 +282,7 @@ def add_common_making_columns(experiment_dataframes: dict):
             )
         if "bulk_density" not in experiment_df.columns:
             experiment_df["bulk_density"] = experiment_df["Mass"] / (
-                np.pi * RADIUS_SQUARED_CM * experiment_df["M_a"]
+                np.pi * RADIUS_SQUARED_CM * experiment_df["height_of_powder"]
             )
         if "relative_density" not in experiment_df.columns:
             experiment_df["relative_density"] = (
@@ -204,6 +292,7 @@ def add_common_making_columns(experiment_dataframes: dict):
 
 
 def add_heckel_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for a Heckel graph"""
     for experiment, experiment_df in experiment_dataframes.items():
         if "ln(1/1-D)" not in experiment_df.columns:
             experiment_df["ln(1/1-D)"] = np.log(
@@ -212,12 +301,14 @@ def add_heckel_columns(experiment_dataframes: dict):
 
 
 def add_compressibility_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for a Compressibility graph"""
     for experiment, experiment_df in experiment_dataframes.items():
         if "porosity" not in experiment_df.columns:
             experiment_df["porosity"] = 1 - experiment_df["relative_density"]
 
 
 def add_common_breaking_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for Breaking graphs"""
     for experiment, experiment_df in experiment_dataframes.items():
         if "tensile_strength" not in experiment_df.columns:
             max_force = experiment_df["Standard Force"].max()
@@ -225,13 +316,14 @@ def add_common_breaking_columns(experiment_dataframes: dict):
                 np.pi
                 * (experiment_df["diameter"] / 1000)
                 * (experiment_df["av height"] / 1000)
-            )  # /1000 to convert metres -> milimetres
+            )  # /1000 to convert meters -> milimeters
             experiment_df["tensile_strength"] = (
                 experiment_df["tensile_strength"] / 1e6
             )  # convert to MPa
 
 
 def add_compactability_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for a Compactability graph"""
     for experiment, experiment_df in experiment_dataframes.items():
         if "out_of_die_radius" not in experiment_df.columns:
             experiment_df["out_of_die_radius"] = (
@@ -261,6 +353,7 @@ def add_compactability_columns(experiment_dataframes: dict):
 
 
 def calculate_compactability(experiment_dataframes: dict) -> dict:
+    """Return a dictionary of new dataframes with calculated Compactability values from the input experimental data"""
     compactability_dataframes = {}
     for experiment, experiment_df in experiment_dataframes.items():
         compactability_df = (
@@ -274,6 +367,7 @@ def calculate_compactability(experiment_dataframes: dict) -> dict:
 
 
 def add_tabletability_columns(experiment_dataframes: dict):
+    """Calculate any missing columns in the dataframes that are needed for a Tabletability graph"""
     # TODO: only the first volume occupancy row is needed at the moment - will more be needed in future graphs?
     for experiment, experiment_df in experiment_dataframes.items():
         if "volume_occupancy" not in experiment_df.columns:
@@ -283,10 +377,13 @@ def add_tabletability_columns(experiment_dataframes: dict):
 
 
 def calculate_tabletability(experiment_dataframes: dict) -> dict:
+    """Return a dictionary of new dataframes with calculated Tabletability values from the input experimental data"""
     tabletability_dataframes = {}
     for experiment, experiment_df in experiment_dataframes.items():
         average_tensile_strength = experiment_df["tensile_strength"].mean()
-        volume_occupancy = float(experiment_df.iloc[0, experiment_df.columns.get_loc("volume_occupancy")])  # type: ignore
+        volume_occupancy = float(
+            experiment_df.iloc[0, experiment_df.columns.get_loc("volume_occupancy")]
+        )
         tabletability_dataframes[experiment] = pd.DataFrame(
             {
                 "volume_occupancy": [volume_occupancy],
@@ -297,21 +394,19 @@ def calculate_tabletability(experiment_dataframes: dict) -> dict:
     return tabletability_dataframes
 
 
-graph_to_stage = {
-    "Heckel": "Making",
-    "Compressibility": "Making",
-    "Compactability": "Breaking",
-    "Tabletability": "Breaking",
-}
-
 if __name__ == "__main__":
-    graph = "Tabletability"
+    graph = "Heckel"
     stage = graph_to_stage[graph]
-    experiment_dataframes = get_all_experiment_dataframes(
-        experiment_stage=stage, force_redo=True
-    )
 
-    # for experiment, df in experiment_dataframes.items():
-    #     print(f"\n\n{experiment}")
-    #     print(df.head())
-    setup_and_plot_graph(graph_type=graph, experiment_dataframes=experiment_dataframes)
+    # experiment_dataframes = {}
+    # experiment_dataframes["Making"] = get_all_experiment_dataframes(
+    #     experiment_stage="Making", force_redo=False
+    # )
+    # experiment_dataframes["Breaking"] = get_all_experiment_dataframes(
+    #     experiment_stage="Breaking", force_redo=False
+    # )
+    # experiment_dataframes = get_all_experiment_dataframes(
+    #     experiment_stage=stage, force_redo=True
+    # )
+    # setup_and_plot_graph(graph_type=graph, experiment_dataframes=experiment_dataframes)
+    get_experiment_dataframes("Breaking", False, ["002ETHMCC", "002MGSTMCC"])
