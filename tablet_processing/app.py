@@ -1,13 +1,13 @@
 from dash import Dash, html, dcc, callback, Output, Input, State
 from dash.exceptions import PreventUpdate
-import plotly.express as px
-import pandas as pd
-from main import get_experiment_dataframes, setup_graph_columns, plot_experiments_plotly
-from config import graph_to_stage
+from config import graph_info
+from main import get_experiment_dataframes, create_all_experiment_csvs
+from graphs import (
+    experiments_scatterplot,
+    reduce_df_to_closest_point,
+)
 
 app = Dash(__name__)
-
-df = pd.read_csv("data/002ETHMCC/002ETHMCC_breaking_data.csv")
 
 app.layout = html.Div(
     [
@@ -46,14 +46,36 @@ app.layout = html.Div(
             [
                 html.Div(
                     [
+                        html.Label("Title"),
                         dcc.Input(
-                            id="graph-title", type="text", placeholder="Graph Title"
+                            id="graph-title",
+                            type="text",
+                            placeholder="Graph Title",
+                            style={"width": "100%"},
                         ),
+                    ],
+                    className="graph-titles",
+                ),
+                html.Div(
+                    [
+                        html.Label("X-Axis"),
                         dcc.Input(
-                            id="x-axis-title", type="text", placeholder="X-Axis Title"
+                            id="x-axis-title",
+                            type="text",
+                            placeholder="X-Axis Title",
+                            style={"width": "100%"},
                         ),
+                    ],
+                    className="graph-titles",
+                ),
+                html.Div(
+                    [
+                        html.Label("Y-Axis"),
                         dcc.Input(
-                            id="y-axis-title", type="text", placeholder="Y-Axis Title"
+                            id="y-axis-title",
+                            type="text",
+                            placeholder="Y-Axis Title",
+                            style={"width": "100%"},
                         ),
                     ],
                     className="graph-titles",
@@ -65,38 +87,10 @@ app.layout = html.Div(
             ],
             id="graph-title-selection",
         ),
-        # dcc.Input(id="graph-title", type="text", placeholder="Graph Title"),
-        # dcc.Input(id="x-axis-title", type="text", placeholder="X-Axis Title"),
-        # dcc.Input(id="y-axis-title", type="text", placeholder="Y-Axis Title"),
         html.Button("Update Graph", id="update-graph-button"),
         dcc.Graph(figure={}, id="main-graph"),
-        html.Div(id="title-output"),
-        html.Div(id="x-axis-output"),
-        html.Div(id="y-axis-output"),
-        dcc.Textarea(
-            id="active-checkboxes-output",
-            value="",
-            readOnly=True,
-            style={"width": "100%"},
-        ),
     ]
 )
-
-
-# @callback(
-#     Output("active-checkboxes-output", "value"),
-#     [Input("checkboxes", "value")],
-#     [State("checkboxes", "options")],
-# )
-# def update_active_checkboxes(checkbox_values, checkbox_options):
-#     if checkbox_values:
-#         active_checkboxes = [
-#             option["label"]
-#             for option in checkbox_options
-#             if option["value"] in checkbox_values
-#         ]
-#         return "\n".join(active_checkboxes)
-#     return ""
 
 
 @callback(
@@ -114,18 +108,47 @@ def create_graph(button_clicks, graph_type, experiments, title, x_axis, y_axis):
     if button_clicks is None:
         raise PreventUpdate
 
-    stage = graph_to_stage[graph_type]
-    experiment_dataframes = get_experiment_dataframes(
-        experiment_stage=stage, force_redo=False, selected_experiments=experiments
-    )
-    x_col, y_col, experiment_dfs = setup_graph_columns(
-        graph_type=graph_type, experiment_dataframes=experiment_dataframes
+    experiments_df = get_experiment_dataframes(
+        graph_type=graph_type, selected_experiments=experiments
     )
 
-    fig = plot_experiments_plotly(
-        experiment_dataframes=experiment_dfs, x_column=x_col, y_column=y_col
+    x_col = graph_info[graph_type].x_column
+    y_col = graph_info[graph_type].y_column
+
+    if graph_type == "Compressibility":
+        experiments_df = reduce_df_to_closest_point(
+            max_value=250,
+            increment=25,
+            input_df=experiments_df,
+            column_to_reduce="pressure",
+        )
+
+    fig = experiments_scatterplot(
+        experiments_df=experiments_df,
+        x_column=x_col,
+        y_column=y_col,
+        x_label=x_axis,
+        y_label=y_axis,
+        title=title,
+        line_fit="linear",
     )
+
     return fig
+
+
+@callback(Output("x-axis-title", "value"), Input("graph-type-radio", "value"))
+def update_x_axis_placeholder(graph_type):
+    return graph_info[graph_type].x_label
+
+
+@callback(Output("y-axis-title", "value"), Input("graph-type-radio", "value"))
+def update_y_axis_placeholder(graph_type):
+    return graph_info[graph_type].y_label
+
+
+@callback(Output("graph-title", "value"), Input("graph-type-radio", "value"))
+def update_graph_title_placeholder(graph_type):
+    return graph_info[graph_type].title
 
 
 # @callback(
@@ -165,23 +188,6 @@ def create_graph(button_clicks, graph_type, experiments, title, x_axis, y_axis):
 
 
 if __name__ == "__main__":
-    # experiment_dataframes = {}
-    # experiment_dataframes["Making"] = get_all_experiment_dataframes(
-    #     experiment_stage="Making", force_redo=False
-    # )
-    # experiment_dataframes["Breaking"] = get_all_experiment_dataframes(
-    #     experiment_stage="Breaking", force_redo=False
-    # )
+    create_all_experiment_csvs("Making", True)
+    create_all_experiment_csvs("Breaking", True)
     app.run_server(debug=True)
-
-"""
-Experiment Buttons
-- Call get_experiment_dataframe on the experiment_dataframes
-
-
-Graph Radio
-- Call setup_graph_columns
-
-
-
-"""
